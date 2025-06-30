@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hand Under Ball Game</title>
+  <style>
+    /* ------------ Base Styles ------------ */
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: sans-serif;
+      background: #f0f0f0;
+    }
+    canvas {
+      display: block;
+      cursor: none; /* NEW: hide default cursor, we draw our own */
+    }
+    /* Controls container */
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+    }
+    #controls button {
+      margin-right: 8px;
+      padding: 6px 12px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    /* Info text overlay */
+    #info {
+      position: absolute;
+      top: 50px;
+      left: 10px;
+      font-size: 16px;
+      color: #333;
+      z-index: 10;
+      max-width: 300px;
+      background: rgba(255,255,255,0.8);
+      padding: 6px;
+      border-radius: 4px;
+    }
+    /* Highscore modal */
+    #highscoreModal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: white;
+      border: 2px solid #333;
+      padding: 20px;
+      z-index: 100;
+      display: none; /* hidden by default */
+      max-width: 90%;
+      max-height: 80%;
+      overflow-y: auto;
+    }
+    #highscoreModal h2 {
+      margin-top: 0;
+    }
+    #highscoreModal ul {
+      list-style: none;
+      padding-left: 0;
+    }
+    #highscoreModal button.close {
+      margin-top: 12px;
+      padding: 4px 8px;
+    }
+    /* Game over / Quit overlay */
+    #gameOverOverlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none; /* enabled when shown */
+      z-index: 50;
+    }
+    /* Fade-in animation for overlay */
+    @keyframes fadeInOverlay {
+      from { background: rgba(0,0,0,0); }
+      to   { background: rgba(0,0,0,0.6); }
+    }
+    /* Menu overlay */
+    #menuOverlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      color: #fff;
+      font-family: sans-serif;
+      z-index: 100;
+    }
+    #menuOverlay h1 {
+      margin-bottom: 20px;
+      font-size: 36px;
+    }
+    #menuOverlay button {
+      margin: 8px;
+      padding: 8px 16px;
+      font-size: 18px;
+      cursor: pointer;
+    }
+    /* Pause overlay text */
+    #pauseOverlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%,-50%);
+      color: #fff;
+      font-size: 32px;
+      font-family: sans-serif;
+      display: none;
+      z-index: 60;
+    }
+  </style>
+</head>
+<body>
+  <!-- Menu screen (NEW) -->
+  <div id="menuOverlay">
+    <h1>Hand Under Ball Game</h1>
+    <div>
+      <label for="levelSelect">Select Level: </label>
+      <select id="levelSelect">
+        <!-- Levels beyond two balls: Easy=1, Medium=2, Hard=3 -->
+        <option value="easy">Easy (1 ball)</option>
+        <option value="medium">Medium (2 balls)</option>
+        <option value="hard">Hard (3 balls)</option>
+      </select>
+    </div>
+    <button id="startBtn">Start Game</button>
+    <button id="showHSBtnMenu">Highscores</button>
+  </div>
+
+  <!-- Controls/buttons: Level toggler, Pause, Highscore, Quit -->
+  <div id="controls" style="display:none;">
+    <button id="levelBtn">Level: Easy</button>
+    <button id="pauseBtn">Pause</button> <!-- NEW Pause/Resume -->
+    <button id="highscoreBtn">Highscore</button>
+    <button id="quitBtn">Quit</button>
+  </div>
+  <div id="info" style="display:none;">
+    Move mouse (or touch) left↔right under the ball(s) without touching them. Score increases on each crossing. Click canvas to restart when over.
+  </div>
+  <!-- Highscore modal -->
+  <div id="highscoreModal">
+    <h2>Top 5 High Scores</h2>
+    <ul id="highscoreList"></ul>
+    <button class="close">Close</button>
+  </div>
+  <!-- Canvas for game -->
+  <canvas id="gameCanvas"></canvas>
+  <!-- Overlay for Game Over / Quit -->
+  <div id="gameOverOverlay"></div>
+  <!-- Pause Overlay -->
+  <div id="pauseOverlay">Paused</div>
+
+  <script>
+  (function(){
+    // ------------ Setup & Globals ------------
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // DOM elements
+    const menuOverlay = document.getElementById('menuOverlay');
+    const levelSelect = document.getElementById('levelSelect');
+    const startBtn = document.getElementById('startBtn');
+    const showHSBtnMenu = document.getElementById('showHSBtnMenu');
+
+    const controls = document.getElementById('controls');
+    const levelBtn = document.getElementById('levelBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const highscoreBtn = document.getElementById('highscoreBtn');
+    const quitBtn = document.getElementById('quitBtn');
+    const infoDiv = document.getElementById('info');
+    const highscoreModal = document.getElementById('highscoreModal');
+    const highscoreList = document.getElementById('highscoreList');
+    const highscoreClose = highscoreModal.querySelector('button.close');
+    const gameOverOverlay = document.getElementById('gameOverOverlay');
+    const pauseOverlay = document.getElementById('pauseOverlay');
+
+    // AudioContext for sound effects (NEW)
+    let audioCtx = null;
+    function ensureAudioCtx(){
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+    function playBeep(frequency=200, duration=100){
+      // Simple beep for bounce
+      ensureAudioCtx();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = frequency;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      gain.gain.setValueAtTime(1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration/1000);
+      osc.stop(audioCtx.currentTime + duration/1000);
+    }
+    function playGameOverSound(){
+      // Simple lower-pitched beep
+      ensureAudioCtx();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 100;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      gain.gain.setValueAtTime(1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+      osc.stop(audioCtx.currentTime + 0.5);
+    }
+
+    // Game state
+    let difficulty = 'easy'; // easy, medium, hard
+    let balls = [];
+    let score = 0;
+    let gameOver = false;
+    let animationId = null;
+    let mouseX = 0, mouseY = 0;
+    let paused = false;
+
+    // Physics config
+    const gravity = 0.5;
+    const damping = 0.8;
+    const stopThreshold = 1;
+    const squashDuration = 200; // ms
+    // Highscore key and persistent settings key
+    const HS_KEY = 'handUnderBallHighscores';
+    const SET_KEY = 'handUnderBallSettings';
+
+    // ------------ Persistent Settings (NEW) ------------
+    function loadSettings() {
+      try {
+        const json = localStorage.getItem(SET_KEY);
+        if (json) {
+          const obj = JSON.parse(json);
+          if (obj.level) {
+            difficulty = obj.level;
+            levelSelect.value = difficulty;
+            levelBtn.textContent = `Level: ${capitalize(difficulty)}`;
+          }
+        }
+      } catch {}
+    }
+    function saveSettings() {
+      const obj = { level: difficulty };
+      localStorage.setItem(SET_KEY, JSON.stringify(obj));
+    }
+
+    // ------------ Ball Factory & Initialization ------------
+    function createBall(initialX) {
+      return {
+        x: initialX,
+        y: 100,
+        radius: 20,
+        vy: 0,
+        vx: 0,
+        prevMouseSide: null,
+        crossingFrom: null,   // NEW: track swipe start side
+        isStopped: false,
+        squashStart: null,
+        hitAnimStart: null, // NEW: timestamp when hit occurs for collision feedback
+      };
+    }
+    function initBalls() {
+      balls = [];
+      let count = 1;
+      if (difficulty === 'easy') count = 1;
+      else if (difficulty === 'medium') count = 2;
+      else if (difficulty === 'hard') count = 3;
+      // Spread initial X positions evenly
+      for (let i = 0; i < count; i++) {
+        const x = canvas.width * ((i + 1) / (count + 1));
+        const ball = createBall(x);
+        // NEW: Ball horizontal motion: give small random vx based on difficulty
+        const baseSpeed = 1 + count * 0.5; // more balls = faster drift
+        const dir = Math.random() < 0.5 ? -1 : 1;
+        ball.vx = dir * (Math.random() * baseSpeed * 0.5 + 0.5);
+        balls.push(ball);
+      }
+      score = 0;
+      gameOver = false;
+      paused = false;
+      // Hide overlays
+      gameOverOverlay.style.display = 'none';
+      pauseOverlay.style.display = 'none';
+      // Show controls/info
+      controls.style.display = 'block';
+      infoDiv.style.display = 'block';
+      // Update level button text
+      levelBtn.textContent = `Level: ${capitalize(difficulty)}`;
+      // Save settings persistently
+      saveSettings();
+    }
+
+    // ------------ Mouse & Touch Tracking (NEW) ------------
+    function updatePointerPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      let clientX, clientY;
+      if (e.touches) {
+        // touch event
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+      mouseX = clientX - rect.left;
+      mouseY = clientY - rect.top;
+      e.preventDefault();
+    }
+    canvas.addEventListener('mousemove', updatePointerPos);
+    canvas.addEventListener('touchmove', updatePointerPos, { passive: false });
+
+    // ------------ Controls Event Listeners ------------
+    levelBtn.addEventListener('click', () => {
+      // Cycle difficulty: easy -> medium -> hard -> easy
+      if (difficulty === 'easy') difficulty = 'medium';
+      else if (difficulty === 'medium') difficulty = 'hard';
+      else difficulty = 'easy';
+      levelBtn.textContent = `Level: ${capitalize(difficulty)}`;
+      initBalls();
+      cancelAnimationFrame(animationId);
+      requestAnimationFrame(gameLoop);
+    });
+    pauseBtn.addEventListener('click', () => {
+      if (!gameOver) {
+        paused = !paused;
+        if (paused) {
+          pauseOverlay.style.display = 'block';
+          pauseBtn.textContent = 'Resume';
+          cancelAnimationFrame(animationId);
+        } else {
+          pauseOverlay.style.display = 'none';
+          pauseBtn.textContent = 'Pause';
+          requestAnimationFrame(gameLoop);
+        }
+      }
+    });
+    highscoreBtn.addEventListener('click', showHighscores);
+    quitBtn.addEventListener('click', () => {
+      cancelAnimationFrame(animationId);
+      gameOver = true;
+      showQuitMessage();
+    });
+
+    // Menu screen listeners
+    startBtn.addEventListener('click', () => {
+      // Read selected level
+      difficulty = levelSelect.value;
+      loadSettings(); // will set levelSelect & levelBtn accordingly
+      saveSettings();
+      menuOverlay.style.display = 'none';
+      initBalls();
+      requestAnimationFrame(gameLoop);
+    });
+    showHSBtnMenu.addEventListener('click', () => {
+      showHighscores();
+    });
+
+    // ------------ Highscore Management ------------
+    function getHighscores() {
+      const json = localStorage.getItem(HS_KEY);
+      if (json) {
+        try {
+          const arr = JSON.parse(json);
+          if (Array.isArray(arr)) return arr;
+        } catch{}
+      }
+      return [];
+    }
+    function saveHighscores(arr) {
+      localStorage.setItem(HS_KEY, JSON.stringify(arr));
+      // NEW: Leaderboard backend stub
+      // sendScoreToServer(arr[0]); // optionally send latest top score
+    }
+    function addHighscore(newScore) {
+      let arr = getHighscores();
+      if (!arr.includes(newScore)) {
+        arr.push(newScore);
+        arr.sort((a,b) => b - a);
+        if (arr.length > 5) arr = arr.slice(0,5);
+        saveHighscores(arr);
+      }
+    }
+    function showHighscores() {
+      const arr = getHighscores();
+      highscoreList.innerHTML = '';
+      if (arr.length === 0) {
+        const li = document.createElement('li');
+        li.textContent = '(No high scores yet)';
+        highscoreList.appendChild(li);
+      } else {
+        arr.forEach((sc, idx) => {
+          const li = document.createElement('li');
+          li.textContent = `${idx+1}. ${sc}`;
+          highscoreList.appendChild(li);
+        });
+      }
+      highscoreModal.style.display = 'block';
+    }
+    highscoreClose.addEventListener('click', () => {
+      highscoreModal.style.display = 'none';
+    });
+
+    // ------------ Leaderboard Backend Stub (NEW) ------------
+    // NOTE: To implement a real backend leaderboard, you need a server endpoint (e.g., REST API).
+    // This is a stub function showing where you would send the score.
+    function sendScoreToServer(score) {
+      // Example (pseudo-code):
+      // fetch('https://your-server.com/api/submit-score', {
+      //   method: 'POST',
+      //   headers: {'Content-Type':'application/json'},
+      //   body: JSON.stringify({ score: score, player: 'Anonymous' })
+      // }).then(...).catch(...);
+      console.log('sendScoreToServer stub: score=', score);
+    }
+
+    // ------------ Game Over / Quit Overlays ------------
+    function showGameOverOverlay(touchedBall=false) {
+      // Animate fade-in background
+      gameOverOverlay.style.display = 'block';
+      gameOverOverlay.style.pointerEvents = 'auto';
+      gameOverOverlay.style.animation = 'fadeInOverlay 0.5s forwards';
+      // Play game over sound
+      playGameOverSound();
+
+      // Message container
+      const msgDiv = document.createElement('div');
+      msgDiv.style.position = 'absolute';
+      msgDiv.style.top = '50%';
+      msgDiv.style.left = '50%';
+      msgDiv.style.transform = 'translate(-50%, -50%)';
+      msgDiv.style.color = '#fff';
+      msgDiv.style.textAlign = 'center';
+      msgDiv.style.fontSize = '32px';
+      msgDiv.style.fontFamily = 'sans-serif';
+
+      if (touchedBall) {
+        msgDiv.textContent = 'Game Over: You touched the ball!';
+      } else {
+        msgDiv.textContent = 'Game Over: Ball(s) stopped bouncing!';
+      }
+      // Show final score
+      const scoreDiv = document.createElement('div');
+      scoreDiv.style.marginTop = '16px';
+      scoreDiv.style.fontSize = '24px';
+      scoreDiv.textContent = `Final Score: ${score}`;
+      msgDiv.appendChild(scoreDiv);
+
+      // Button to restart
+      const btn = document.createElement('button');
+      btn.textContent = 'Play Again';
+      btn.style.marginTop = '20px';
+      btn.style.padding = '8px 16px';
+      btn.style.fontSize = '18px';
+      btn.addEventListener('click', () => {
+        highscoreModal.style.display = 'none';
+        gameOverOverlay.style.display = 'none';
+        initBalls();
+        requestAnimationFrame(gameLoop);
+      });
+      msgDiv.appendChild(btn);
+      gameOverOverlay.innerHTML = '';
+      gameOverOverlay.appendChild(msgDiv);
+    }
+    function showQuitMessage() {
+      gameOverOverlay.style.display = 'block';
+      gameOverOverlay.style.pointerEvents = 'auto';
+      gameOverOverlay.style.background = 'rgba(0,0,0,0.6)';
+      const div = document.createElement('div');
+      div.style.position = 'absolute';
+      div.style.top = '50%';
+      div.style.left = '50%';
+      div.style.transform = 'translate(-50%, -50%)';
+      div.style.color = '#fff';
+      div.style.fontSize = '32px';
+      div.style.fontFamily = 'sans-serif';
+      div.textContent = 'Game Quit. Reload page or click Play Again to start.';
+      const btn = document.createElement('button');
+      btn.textContent = 'Play Again';
+      btn.style.marginTop = '20px';
+      btn.style.padding = '8px 16px';
+      btn.style.fontSize = '18px';
+      btn.addEventListener('click', () => {
+        gameOverOverlay.style.display = 'none';
+        initBalls();
+        requestAnimationFrame(gameLoop);
+      });
+      div.appendChild(btn);
+      gameOverOverlay.innerHTML = '';
+      gameOverOverlay.appendChild(div);
+    }
+
+    // ------------ Physics & Update Functions ------------
+    function updateBall(ball, now) {
+      if (ball.isStopped) return;
+      // Apply gravity
+      ball.vy += gravity;
+      // Update position
+      ball.y += ball.vy;
+      ball.x += ball.vx;
+
+      const groundY = canvas.height - 50;
+
+      // Bounce off floor
+      if (ball.y + ball.radius >= groundY) {
+        ball.y = groundY - ball.radius;
+        // Start squash animation
+        ball.squashStart = now;
+        // Reverse & dampen vertical velocity
+        ball.vy = -ball.vy * damping;
+        // Play bounce sound
+        playBeep(200, 100);
+        // If bounce very small, stop
+        if (Math.abs(ball.vy) < stopThreshold) {
+          ball.vy = 0;
+          ball.isStopped = true;
+        }
+      }
+      // NEW: Bounce off left/right walls
+      if (ball.x - ball.radius <= 0) {
+        ball.x = ball.radius;
+        ball.vx = -ball.vx * damping;
+      } else if (ball.x + ball.radius >= canvas.width) {
+        ball.x = canvas.width - ball.radius;
+        ball.vx = -ball.vx * damping;
+      }
+    }
+
+    // Determine mouse side relative to ball, for scoring
+    function getMouseSide(ball) {
+      const threshold = ball.radius;
+      if (mouseX < ball.x - threshold) return 'left';
+      if (mouseX > ball.x + threshold) return 'right';
+      return 'under';
+    }
+
+    function updateScoreForBall(ball) {
+      if (ball.isStopped) return;
+      const threshold = ball.radius; 
+  let side;
+  if (mouseX < ball.x - threshold) side = 'left';
+  else if (mouseX > ball.x + threshold) side = 'right';
+  else side = 'under';
+
+  // If we previously had a side:
+  if (ball.prevMouseSide) {
+    // If we were on left and now entered under, mark start:
+    if (ball.prevMouseSide === 'left' && side === 'under') {
+      ball.crossingFrom = 'left';
+    }
+    // If we were on right and now entered under:
+    else if (ball.prevMouseSide === 'right' && side === 'under') {
+      ball.crossingFrom = 'right';
+    }
+    // If we were in under and now on right, and started from left: count
+    else if (ball.crossingFrom === 'left' && side === 'right') {
+      score++;
+      ball.crossingFrom = null;
+    }
+    // If we were in under and now on left, and started from right: count
+    else if (ball.crossingFrom === 'right' && side === 'left') {
+      score++;
+      ball.crossingFrom = null;
+    }
+    // If we move back to the same side before completing under step:
+    // e.g., left → under → left again: cancel
+    else if (ball.crossingFrom === 'left' && side === 'left') {
+      ball.crossingFrom = null;
+    }
+    else if (ball.crossingFrom === 'right' && side === 'right') {
+      ball.crossingFrom = null;
+    }
+    // Otherwise (e.g., side stays left→left or right→right before under), do nothing.
+  }
+      ball.prevMouseSide = side;
+    }
+
+    // Check game-over conditions, and set hit animation start when collision occurs
+    function checkGameOver(now) {
+      let touched = false;
+      for (const ball of balls) {
+        if (!ball.isStopped) {
+          const dx = mouseX - ball.x;
+          const dy = mouseY - ball.y;
+          if (dx*dx + dy*dy <= ball.radius*ball.radius) {
+            gameOver = true;
+            touched = true;
+            // NEW: collision feedback: record timestamp
+            ball.hitAnimStart = now;
+            break;
+          }
+        }
+      }
+      if (touched) return { over: true, touched: true };
+      const allStopped = balls.every(b => b.isStopped);
+      if (allStopped) {
+        gameOver = true;
+        return { over: true, touched: false };
+      }
+      return { over: false };
+    }
+
+    // ------------ Drawing Functions ------------
+    function drawBall(ball, now) {
+      // Compute squash effect
+      const groundY = canvas.height - 50;
+      let scaleX = 1, scaleY = 1;
+      if (ball.squashStart !== null) {
+        const elapsed = now - ball.squashStart;
+        if (elapsed <= squashDuration) {
+          const p = elapsed / squashDuration;
+          const squashFactor = Math.sin((1 - p) * Math.PI);
+          scaleX = 1 + 0.3 * squashFactor;
+          scaleY = 1 - 0.3 * squashFactor;
+        } else {
+          ball.squashStart = null;
+        }
+      }
+      ctx.save();
+      ctx.translate(ball.x, ball.y);
+      ctx.scale(scaleX, scaleY);
+      // NEW: collision feedback animation (brief flash or scale)
+      if (ball.hitAnimStart !== null) {
+        const elapsed = now - ball.hitAnimStart;
+        const dur = 300; // ms
+        if (elapsed <= dur) {
+          // e.g., pulse scale and color
+          const p = elapsed / dur; // 0..1
+          const pulse = 1 + 0.5 * Math.sin(p * Math.PI * 4); // fast pulses
+          ctx.scale(pulse, pulse);
+          ctx.fillStyle = `rgba(255,0,0,${1 - p})`; // fade out
+        } else {
+          // after animation, clear
+          ball.hitAnimStart = null;
+        }
+      }
+      ctx.beginPath();
+      ctx.arc(0, 0, ball.radius, 0, Math.PI*2);
+      ctx.fillStyle = 'red';
+      ctx.fill();
+      ctx.closePath();
+      ctx.restore();
+    }
+
+    function drawMouseCursor() {
+      ctx.beginPath();
+      ctx.arc(mouseX, mouseY, 8, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(0,0,255,0.5)';
+      ctx.fill();
+      ctx.closePath();
+    }
+
+    function drawGround() {
+      const groundY = canvas.height - 50;
+      ctx.beginPath();
+      ctx.moveTo(0, groundY);
+      ctx.lineTo(canvas.width, groundY);
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    function drawScore() {
+      ctx.font = '20px sans-serif';
+      ctx.fillStyle = '#000';
+      ctx.fillText(`Score: ${score}`, 10, 30);
+    }
+
+    // ------------ Utility ------------
+    function capitalize(s) {
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // ------------ Game Loop ------------
+    function gameLoop(timestamp) {
+      if (paused) return; // do nothing if paused
+      if (gameOver) {
+        cancelAnimationFrame(animationId);
+        addHighscore(score);
+        const result = checkGameOver(timestamp);
+        showGameOverOverlay(result.touched);
+        return;
+      }
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      drawGround();
+      for (const ball of balls) {
+        updateBall(ball, timestamp);
+      }
+      for (const ball of balls) {
+        drawBall(ball, timestamp);
+      }
+      for (const ball of balls) {
+        updateScoreForBall(ball);
+      }
+      drawScore();
+      drawMouseCursor();
+      const result = checkGameOver(timestamp);
+      if (result.over) {
+        gameOver = true;
+      }
+      animationId = requestAnimationFrame(gameLoop);
+    }
+
+    // ------------ Start-up ------------
+    // Load persistent settings
+    loadSettings();
+    // Show menu overlay
+    menuOverlay.style.display = 'flex';
+    // Clicking canvas during game over/restart
+    canvas.addEventListener('click', () => {
+      if (gameOver) {
+        cancelAnimationFrame(animationId);
+        initBalls();
+        requestAnimationFrame(gameLoop);
+      }
+    });
+  })();
+  </script>
+</body>
+</html>
